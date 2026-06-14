@@ -221,3 +221,9 @@ __marimo__/
 
 
 api_key.txt
+
+*.bak
+data/final_test/FloorPlan99.json
+logs/**/agent_*/
+logs/**/top_view/
+logs/**/executable_plan.py
