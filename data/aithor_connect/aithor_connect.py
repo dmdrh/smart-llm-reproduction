@@ -42,24 +42,30 @@ for i in range (no_robot):
 
 def exec_actions():
     global total_exec, success_exec
-    # delete if current output already exist
-    cur_path = os.path.dirname(__file__) + "/*/"
-    for x in glob(cur_path, recursive = True):
-        shutil.rmtree (x)
-    
+    # 이미지 전용 출력 폴더 (task 로그 폴더 하위로 한정)
+    # task_log_path는 execute_plan.py가 주입. 없으면 안전한 전용 하위 폴더로 폴백.
+    try:
+        base_path = task_log_path
+    except NameError:
+        base_path = os.getcwd()
+    output_img_path = os.path.join(base_path, "output_images")
+
+    # 이전 실행 이미지 폴더만 통째로 삭제 (반드시 output_images 하위만)
+    if os.path.isdir(output_img_path):
+        shutil.rmtree(output_img_path)
+    os.makedirs(output_img_path, exist_ok=True)
+
     # create new folders to save the images from the agents
     for i in range(no_robot):
-        folder_name = "agent_" + str(i+1)
-        folder_path = os.path.dirname(__file__) + "/" + folder_name
+        folder_path = os.path.join(output_img_path, "agent_" + str(i+1))
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
-    
+
     # create folder to store the top view images
-    folder_name = "top_view"
-    folder_path = os.path.dirname(__file__) + "/" + folder_name
+    folder_path = os.path.join(output_img_path, "top_view")
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
-    
+
     img_counter = 0
     
     while not task_over:
@@ -168,11 +174,11 @@ def exec_actions():
                 
             for i,e in enumerate(multi_agent_event.events):
                 cv2.imshow('agent%s' % i, e.cv2img)
-                f_name = os.path.dirname(__file__) + "/agent_" + str(i+1) + "/img_" + str(img_counter).zfill(5) + ".png"
+                f_name = os.path.join(output_img_path, "agent_" + str(i+1), "img_" + str(img_counter).zfill(5) + ".png")
                 cv2.imwrite(f_name, e.cv2img)
             top_view_rgb = cv2.cvtColor(c.last_event.events[0].third_party_camera_frames[-1], cv2.COLOR_BGR2RGB)
             cv2.imshow('Top View', top_view_rgb)
-            f_name = os.path.dirname(__file__) + "/top_view/img_" + str(img_counter).zfill(5) + ".png"
+            f_name = os.path.join(output_img_path, "top_view", "img_" + str(img_counter).zfill(5) + ".png")
             cv2.imwrite(f_name, top_view_rgb)
             if cv2.waitKey(25) & 0xFF == ord('q'):
                 break

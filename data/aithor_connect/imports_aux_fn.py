@@ -33,17 +33,24 @@ def distance_pts(p1: Tuple[float, float, float], p2: Tuple[float, float, float])
 def generate_video():
     frame_rate = 5
     # input_path, prefix, char_id=0, image_synthesis=['normal'], frame_rate=5
-    cur_path = os.path.dirname(__file__) + "/*/"
+    # 이미지 전용 출력 폴더(output_images) 안만 훑는다. task_log_path는
+    # execute_plan.py가 주입. 없으면 안전한 전용 하위 폴더로 폴백.
+    try:
+        base_path = task_log_path
+    except NameError:
+        base_path = os.getcwd()
+    output_img_path = os.path.join(base_path, "output_images")
+    cur_path = os.path.join(output_img_path, "*", "")
     for imgs_folder in glob(cur_path, recursive = False):
-        view = imgs_folder.split('/')[-2]
+        view = os.path.basename(os.path.normpath(imgs_folder))
         if not os.path.isdir(imgs_folder):
             print("The input path: {} you specified does not exist.".format(imgs_folder))
         else:
             command_set = ['ffmpeg', '-i',
-                                '{}/img_%05d.png'.format(imgs_folder), 
+                                '{}/img_%05d.png'.format(imgs_folder),
                                 '-framerate', str(frame_rate),
                                 '-pix_fmt', 'yuv420p',
-                                '{}/video_{}.mp4'.format(os.path.dirname(__file__), view)]
+                                '{}/video_{}.mp4'.format(output_img_path, view)]
             subprocess.call(command_set)
         
 

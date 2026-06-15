@@ -119,6 +119,9 @@ def compile_aithor_exec_file(expt_name):
     max_trans = log_data[11][12:]
     executable_plan += ("max_trans = " + max_trans + "\n")
     
+    # 이미지 출력 폴더 기준 경로를 실행 파일에 주입 (루트 오삭제 방지)
+    executable_plan += (f'task_log_path = r"{log_path}"\n\n')
+
     # append the ai thoe connector and helper fns
     connector_file = Path(os.getcwd() + "/data/aithor_connect/aithor_connect.py").read_text()
     executable_plan += (connector_file + "\n")
