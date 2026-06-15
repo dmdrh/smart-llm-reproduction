@@ -19,7 +19,11 @@ def closest_node(node, nodes, no_robot, clost_node_location):
     distances = distance.cdist([node], nodes)[0]
     dist_indices = np.argsort(np.array(distances))
     for i in range(no_robot):
-        pos_index = dist_indices[(i * 5) + clost_node_location[i]]
+        # 재시도 카운터(clost_node_location)가 누적되면 인덱스가 dist_indices 길이를
+        # 초과할 수 있다. 마지막 유효 인덱스(len-1)로 clamp하여 IndexError를 방지한다.
+        idx = (i * 5) + clost_node_location[i]
+        idx = min(idx, len(dist_indices) - 1)
+        pos_index = dist_indices[idx]
         crps.append (nodes[pos_index])
     return crps
 
