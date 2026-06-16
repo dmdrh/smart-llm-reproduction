@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(///wsl.localhost/Ubuntu/home/goeun/**)",
+      "Bash(cat)",
+      "Bash(python3 /tmp/verify_validate.py)",
+      "Bash(rm -f _verify_tmp.py)"
+    ]
+  }
+}

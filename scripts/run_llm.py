@@ -103,6 +103,59 @@ def normalize_skills(text):
 
 
 # ============================================================
+# [스킬 검증] validate_skills - decompose 단계의 필요 스킬을 검증
+# 목적: 분해된 서브태스크가 요구하는 스킬을, (1) 14종(actions.py)에 정의된
+#       스킬인지, (2) 해당 태스크에 배정된 로봇들이 실제로 보유하는지 검사한다.
+#       환각/배정미스를 탐지해 경고만 남기며, 계획 생성은 차단하지 않는다.
+# 배경: 2-2 실험에서 LLM이 없는 스킬을 환각(예: Paint)하거나, 정의는 됐지만
+#       배정 로봇이 못 가진 스킬(예: CleanObject - 14종엔 있으나 보유 로봇 없음)을
+#       요구하는 경우가 관찰됨.
+# ============================================================
+
+# decompose 출력의 'Skills Required: GoToObject, PickupObject)' 표기를 잡는 정규식.
+# - 'Skills Required:' 이후, 닫는 괄호 ')' 또는 줄바꿈 직전까지를 캡처한다.
+# - 이 표기는 'GENERAL TASK DECOMPOSITION' 불릿 라인에만 등장한다.
+_SKILLS_REQUIRED_RE = re.compile(r'Skills Required:\s*([^)\n]+)')
+
+
+def extract_required_skills(decomposed_text):
+    """decompose 출력 텍스트에서 (서브태스크 라벨, [필요 스킬, ...]) 리스트를 추출한다."""
+    results = []
+    for line in decomposed_text.splitlines():
+        m = _SKILLS_REQUIRED_RE.search(line)
+        if not m:
+            continue
+        # 콤마로 분리 후 감싼 마크다운/구두점(`, *, ., ', ", 공백)을 벗긴다.
+        #   예: '`GoToObject`'  -> 'GoToObject',  'PutObject.' -> 'PutObject'
+        skills = [s.strip().strip('`*.\'" ') for s in m.group(1).split(',')]
+        skills = [s for s in skills if s]   # 빈 토큰 제거
+        results.append((line.strip(), skills))
+    return results
+
+
+def validate_skills(decomposed_text, task_robots):
+    """필요 스킬을 두 단계로 검증하고 경고 문자열 리스트를 반환한다(차단하지 않음).
+      - 14종(actions.py)에 아예 없는 스킬        → '[환각] 정의되지 않은 스킬: X'
+      - 14종엔 있으나 배정 로봇이 미보유한 스킬   → '[배정미스] 로봇이 보유하지 않은 스킬: X'
+    task_robots: 해당 태스크에 배정된 로봇 dict 리스트(각 dict는 'skills' 키 보유)."""
+    canonical = set(CANONICAL_SKILLS)              # 14종 정의 스킬 (actions.py 파생)
+    robot_skills = set()                           # 배정 로봇들의 스킬 합집합
+    for r in task_robots:
+        robot_skills.update(r.get('skills', []))
+
+    warnings = []
+    for label, skills in extract_required_skills(decomposed_text):
+        for sk in skills:
+            # 대소문자/공백 깨짐을 정상 14종명으로 보정 시도(없으면 원문 유지)
+            sk_norm = _SKILL_LOOKUP.get(sk.lower(), sk)
+            if sk_norm not in canonical:
+                warnings.append(f"[환각] 정의되지 않은 스킬: {sk}  ({label})")
+            elif sk_norm not in robot_skills:
+                warnings.append(f"[배정미스] 로봇이 보유하지 않은 스킬: {sk_norm}  ({label})")
+    return warnings
+
+
+# ============================================================
 # [핵심 함수 1] LM - LLM(GPT) API 호출 래퍼  (openai>=1.0 신 SDK)
 # 역할: GPT 계열 모델에 프롬프트를 보내고 텍스트 응답을 반환한다.
 # 변경: openai.ChatCompletion.create → client.chat.completions.create
@@ -548,6 +601,16 @@ if __name__ == "__main__":
                 f.write(f"\nground_truth = {gt_test_tasks[idx]}")
                 f.write(f"\ntrans = {trans_cnt_tasks[idx]}")
                 f.write(f"\nmax_trans = {max_trans_cnt_tasks[idx]}")
+
+            # ── 스킬 검증: 배정 로봇이 필요 스킬을 보유하는지 확인 (경고만, 차단 X) ──
+            skill_warnings = validate_skills(decomposed_plan[idx], available_robots[idx])
+            if skill_warnings:
+                print(f"\n[스킬 검증] {task}")
+                for w in skill_warnings:
+                    print("  " + w)
+                with open(f"./logs/{folder_name}/log.txt", 'a') as f:
+                    f.write("\n\n# ===== Skill Validation Warnings =====\n")
+                    f.write("\n".join(skill_warnings))
 
             with open(f"./logs/{folder_name}/decomposed_plan.py", 'w') as d:
                 d.write(decomposed_plan[idx])
