@@ -461,14 +461,14 @@ if __name__ == "__main__":
             # "You are a Robot Task Allocation Expert"를 한 번 더 반복하는 이유:
             # GPT-4가 첫 번째 system message의 긴 내용 처리 후 역할 페르소나를 유지하도록 보강
             #
-            # max_tokens=400: 추론 결과는 짧은 주석 형태이므로 충분
+            # max_tokens=1000: mass 추론이 길어지면 400으로는 잘림(냉장고 사례) → 1000으로 상향
             # frequency_penalty=0.69: 2단계에서 가장 높은 값 — 반복 추론 패턴 강력 억제
             messages = [
                 {"role": "system", "content": "You are a Robot Task Allocation Expert. Determine whether the subtasks must be performed sequentially or in parallel, or a combination of both based on your reasoning. In the case of Task Allocation based on Robot Skills alone - First check if robot teams are required. Then Ensure that robot skills or robot team skills match the required skills for the subtask when allocating. Make sure that condition is met. In the case of Task Allocation based on Mass alone - First check if robot teams are required. Then Ensure that robot mass capacity or robot team combined mass capacity is greater than or equal to the mass for the object when allocating. Make sure that condition is met. In both the Task Task Allocation based on Mass alone and Task Allocation based on Skill alone, if there are multiple options for allocation, pick the best available option by reasoning to the best of your ability."},
                 {"role": "system", "content": "You are a Robot Task Allocation Expert"},
                 {"role": "user",   "content": curr_prompt}
             ]
-            _, text = LM(client, messages, args.gpt_version, max_tokens=400, frequency_penalty=0.69)
+            _, text = LM(client, messages, args.gpt_version, max_tokens=1000, frequency_penalty=0.69)
 
         # LLM이 생성한 추론 텍스트를 수집
         # 이 text는 3단계(Code Generation) 프롬프트에 그대로 이어붙여진다.
