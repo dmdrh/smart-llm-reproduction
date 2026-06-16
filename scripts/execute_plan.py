@@ -142,12 +142,13 @@ def compile_aithor_exec_file(expt_name):
         
     return (f"{log_path}/executable_plan.py")
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--command", type=str, required=True)
-args = parser.parse_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--command", type=str, required=True)
+    args = parser.parse_args()
 
-expt_name = args.command
-print (expt_name)
-ai_exec_file = compile_aithor_exec_file(expt_name)
+    expt_name = args.command
+    print (expt_name)
+    ai_exec_file = compile_aithor_exec_file(expt_name)
 
-subprocess.run(["python", ai_exec_file])
+    subprocess.run(["python", ai_exec_file])
