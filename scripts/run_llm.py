@@ -7,6 +7,8 @@ from pathlib import Path
 from datetime import datetime
 import random
 import subprocess
+import re
+import difflib
 
 from openai import OpenAI
 import ai2thor.controller
@@ -17,6 +19,87 @@ sys.path.append(".")
 # 사용 가능한 로봇 액션 목록 (14종) 및 로봇 프로필(스킬, 질량) 정의 파일
 import resources.actions as actions
 import resources.robots as robots
+
+
+# ============================================================
+# [스킬명 정규화] normalize_skills - allocation 출력의 깨진 스킬명 교정
+# 배경: LLM이 로봇 스킬 목록을 출력할 때(특히 마지막 로봇) 형식이 자주 깨진다.
+#       공백 삽입('Pickup Object'), 대소문자('Pickupobject'),
+#       글자 잘림('PickupObjec'), 글자 추가/환각('GoToObjective').
+# 안전 원칙: 확실한 것만 결정론으로 고치고, 애매하면 원문을 그대로 둔다.
+# ============================================================
+
+# ── 정상 스킬 14종: resources/actions.py에서 파생 (하드코딩 중복/드리프트 방지) ──
+#   actions.ai2thor_actions = "GoToObject <robot><object>, OpenObject <robot>..., PullObject ..."
+#   ', '로 split 후 각 조각의 첫 토큰이 스킬명이다.
+CANONICAL_SKILLS = [seg.strip().split()[0]
+                    for seg in actions.ai2thor_actions.split(',')
+                    if seg.strip()]
+
+# 정규화 키(소문자) → 정상명
+_SKILL_LOOKUP = {s.lower(): s for s in CANONICAL_SKILLS}
+
+
+# CamelCase를 하위 단어로 분해해, '하위단어 사이 공백 허용 + 대소문자 무시' 패턴 생성
+#   'PickupObject' → ['Pickup','Object'] → r'\bPickup\s*Object\b' (IGNORECASE)
+def _skill_pattern(name):
+    parts = re.findall(r'[A-Z][a-z]*', name)            # 'GoToObject'→['Go','To','Object']
+    return re.compile(r'\b' + r'\s*'.join(parts) + r'\b', re.IGNORECASE)
+
+
+# 긴 이름이 짧은 이름보다 먼저 매칭되도록 정렬
+_SKILL_PATTERNS = sorted(((s, _skill_pattern(s)) for s in CANONICAL_SKILLS),
+                         key=lambda p: -len(p[0]))
+
+# 2차 후보: 길이 6+ 의 한 덩어리 알파벳 토큰만
+_CAMEL_TOKEN = re.compile(r'\b[A-Za-z]{6,}\b')
+
+# 2차(편집거리) 오교정 방지 파라미터
+_FUZZY_THRESHOLD = 0.85    # 이 유사도 미만이면 손대지 않음
+_FUZZY_MARGIN    = 0.07    # 1등-2등 유사도 차가 이보다 작으면(애매) 보류
+
+
+def normalize_skills(text):
+    """allocation 출력 텍스트의 깨진 스킬명을 정상 14종으로 교정한다.
+    정상 스킬명/무관한 텍스트는 건드리지 않는다(안전 우선)."""
+    if not text:
+        return text
+
+    # ── 1차: 공백 삽입 + 대소문자 깨짐 (결정론적, 오교정 0) ──
+    # 글자 '구성'이 정상 스킬과 정확히 일치할 때만 치환된다.
+    #   'Pickup Object', 'Pickupobject', 'PICKUPOBJECT' → 'PickupObject'
+    # 전부 소문자인 매치는 평문(prose)일 가능성 → 건드리지 않는다.
+    for canon, pat in _SKILL_PATTERNS:
+        text = pat.sub(
+            lambda m, c=canon: m.group(0) if m.group(0).islower() else c,
+            text)
+
+    # ── 2차: 글자 잘림/추가(환각) — 편집거리 기반, 임계값으로 오교정 차단 ──
+    def _stage2(m):
+        tok = m.group(0)
+        key = tok.lower()
+
+        # (a) 이미 정상 스킬이면 절대 손대지 않음
+        if key in _SKILL_LOOKUP:
+            return tok
+        # (b) '스킬 시도' 형태만 후보: 대문자 2개 이상인 CamelCase 토큰만
+        #     (일반 단어/문장 첫 단어/고유명사 대부분 제외)
+        if sum(c.isupper() for c in tok) < 2:
+            return tok
+
+        scored = sorted(
+            ((difflib.SequenceMatcher(None, key, c.lower()).ratio(), c)
+             for c in CANONICAL_SKILLS),
+            reverse=True)
+        best_r, best_c = scored[0]
+        second_r = scored[1][0]
+
+        # (c) 임계값 미달 → 보류   (d) 1등-2등이 애매하면 → 보류
+        if best_r < _FUZZY_THRESHOLD or best_r - second_r < _FUZZY_MARGIN:
+            return tok
+        return best_c
+
+    return _CAMEL_TOKEN.sub(_stage2, text)
 
 
 # ============================================================
@@ -337,6 +420,8 @@ if __name__ == "__main__":
         # LLM이 생성한 추론 텍스트를 수집
         # 이 text는 3단계(Code Generation) 프롬프트에 그대로 이어붙여진다.
         # 즉, "왜 이 로봇 조합인가"의 근거가 3단계 코드 생성의 컨텍스트가 된다.
+        # 수집 전에 깨진 스킬명(공백/대소문자/잘림/환각)을 정상 14종으로 교정한다.
+        text = normalize_skills(text)
         allocated_plan.append(text)
 
     print ("Generating Allocated Code...")
