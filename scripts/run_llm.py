@@ -334,20 +334,14 @@ if __name__ == "__main__":
         # 자연어 태스크(예: "Slice the tomato")가 이 지점에서 최초로 프롬프트에 삽입된다.
         curr_prompt =  f"{prompt}\n\n# Task Description: {task}"
 
-        if "gpt" not in args.gpt_version:
-            # ── 구버전 GPT: Completion API 사용
-            # stop=["def"]: 다음 함수 정의 전에 출력 중단 (구버전 특성)
-            # frequency_penalty=0.15: 반복 표현을 약하게 억제
-            _, text = LM(client, curr_prompt, args.gpt_version, max_tokens=1000, stop=["def"], frequency_penalty=0.15)
-        else:
-            # ── 신버전 GPT (gpt-3.5-turbo, gpt-4): ChatCompletion API 사용
-            # system message 없음 — 제약은 오직 few-shot 패턴만으로 전달된다.
-            # (3단계 Allocation과의 차이점: Allocation은 system message로 역할을 명시)
-            # temperature=0 (기본값): 결정론적 출력 → 재현 가능성 확보
-            # frequency_penalty=0.0: 반복 억제 없음 (반복 서브태스크 구조를 해치지 않기 위해)
-            # max_tokens=1300: 복잡한 태스크의 긴 코드를 수용하기 위한 여유 크기
-            messages = [{"role": "user", "content": curr_prompt}]
-            _, text = LM(client, messages, args.gpt_version, max_tokens=1300, frequency_penalty=0.0)
+        # ── 신버전 GPT (gpt-3.5-turbo, gpt-4): ChatCompletion API 사용
+        # system message 없음 — 제약은 오직 few-shot 패턴만으로 전달된다.
+        # (3단계 Allocation과의 차이점: Allocation은 system message로 역할을 명시)
+        # temperature=0 (기본값): 결정론적 출력 → 재현 가능성 확보
+        # frequency_penalty=0.0: 반복 억제 없음 (반복 서브태스크 구조를 해치지 않기 위해)
+        # max_tokens=1300: 복잡한 태스크의 긴 코드를 수용하기 위한 여유 크기
+        messages = [{"role": "user", "content": curr_prompt}]
+        _, text = LM(client, messages, args.gpt_version, max_tokens=1300, frequency_penalty=0.0)
 
         # LLM이 생성한 Python 코드 문자열을 결과 리스트에 추가
         # 이 text는 다음 단계(2단계 Coalition Formation)의 프롬프트 입력으로 그대로 연결된다.
@@ -434,41 +428,27 @@ if __name__ == "__main__":
         curr_prompt += f"\n\n# IMPORTANT: The AI should ensure that the robots assigned to the tasks have all the necessary skills to perform the tasks. IMPORTANT: Determine whether the subtasks must be performed sequentially or in parallel, or a combination of both and allocate robots based on availablitiy. "
         curr_prompt += f"\n# SOLUTION  \n"
 
-        # ── [2-D] 모델별 LLM 호출 ──
-        if "gpt" not in args.gpt_version:
-            # ── 구버전 GPT (Completion API): frequency_penalty=0.65로 강하게 억제
-            # 2단계는 1단계(0.15)보다 penalty가 훨씬 높다.
-            # 이유: 추론 텍스트에서 같은 결론이 반복 서술되는 것을 방지
-            _, text = LM(client, curr_prompt, args.gpt_version, max_tokens=1000, stop=["def"], frequency_penalty=0.65)
-
-        elif "gpt-3.5" in args.gpt_version:
-            # ── GPT-3.5 계열: system message 없이 user message만 사용
-            # frequency_penalty=0.35 (구버전보다 낮음 — 3.5는 반복 경향이 덜함)
-            # max_tokens=1500: 3.5는 추론 능력이 낮아 더 길게 써야 도달하는 경향
-            messages = [{"role": "user", "content": curr_prompt}]
-            _, text = LM(client, messages, args.gpt_version, max_tokens=1500, frequency_penalty=0.35)
-
-        else:
-            # ── GPT-4: system message 2개 + user message 구조 (1단계와 가장 큰 차이점)
-            #
-            # [System Message 1 - 상세 역할 + 추론 규칙 명시]
-            # "스킬 기반 할당": 필요 스킬 집합 ⊆ 로봇(팀) 스킬 집합 인지 검증
-            # "질량 기반 할당": 로봇(팀) mass_capacity ≥ 객체 mass 인지 검증
-            # "다중 후보 시": 최선의 선택을 reasoning으로 결정
-            # → 이 규칙들이 코드가 아닌 자연어 추론(Chain-of-Thought)을 통해 강제된다.
-            #
-            # [System Message 2 - 역할 재강조]
-            # "You are a Robot Task Allocation Expert"를 한 번 더 반복하는 이유:
-            # GPT-4가 첫 번째 system message의 긴 내용 처리 후 역할 페르소나를 유지하도록 보강
-            #
-            # max_tokens=1000: mass 추론이 길어지면 400으로는 잘림(냉장고 사례) → 1000으로 상향
-            # frequency_penalty=0.69: 2단계에서 가장 높은 값 — 반복 추론 패턴 강력 억제
-            messages = [
-                {"role": "system", "content": "You are a Robot Task Allocation Expert. Determine whether the subtasks must be performed sequentially or in parallel, or a combination of both based on your reasoning. In the case of Task Allocation based on Robot Skills alone - First check if robot teams are required. Then Ensure that robot skills or robot team skills match the required skills for the subtask when allocating. Make sure that condition is met. In the case of Task Allocation based on Mass alone - First check if robot teams are required. Then Ensure that robot mass capacity or robot team combined mass capacity is greater than or equal to the mass for the object when allocating. Make sure that condition is met. In both the Task Task Allocation based on Mass alone and Task Allocation based on Skill alone, if there are multiple options for allocation, pick the best available option by reasoning to the best of your ability."},
-                {"role": "system", "content": "You are a Robot Task Allocation Expert"},
-                {"role": "user",   "content": curr_prompt}
-            ]
-            _, text = LM(client, messages, args.gpt_version, max_tokens=1000, frequency_penalty=0.69)
+        # ── [2-D] LLM 호출 ──
+        # ── GPT-4: system message 2개 + user message 구조 (1단계와 가장 큰 차이점)
+        #
+        # [System Message 1 - 상세 역할 + 추론 규칙 명시]
+        # "스킬 기반 할당": 필요 스킬 집합 ⊆ 로봇(팀) 스킬 집합 인지 검증
+        # "질량 기반 할당": 로봇(팀) mass_capacity ≥ 객체 mass 인지 검증
+        # "다중 후보 시": 최선의 선택을 reasoning으로 결정
+        # → 이 규칙들이 코드가 아닌 자연어 추론(Chain-of-Thought)을 통해 강제된다.
+        #
+        # [System Message 2 - 역할 재강조]
+        # "You are a Robot Task Allocation Expert"를 한 번 더 반복하는 이유:
+        # GPT-4가 첫 번째 system message의 긴 내용 처리 후 역할 페르소나를 유지하도록 보강
+        #
+        # max_tokens=1000: mass 추론이 길어지면 400으로는 잘림(냉장고 사례) → 1000으로 상향
+        # frequency_penalty=0.69: 2단계에서 가장 높은 값 — 반복 추론 패턴 강력 억제
+        messages = [
+            {"role": "system", "content": "You are a Robot Task Allocation Expert. Determine whether the subtasks must be performed sequentially or in parallel, or a combination of both based on your reasoning. In the case of Task Allocation based on Robot Skills alone - First check if robot teams are required. Then Ensure that robot skills or robot team skills match the required skills for the subtask when allocating. Make sure that condition is met. In the case of Task Allocation based on Mass alone - First check if robot teams are required. Then Ensure that robot mass capacity or robot team combined mass capacity is greater than or equal to the mass for the object when allocating. Make sure that condition is met. In both the Task Task Allocation based on Mass alone and Task Allocation based on Skill alone, if there are multiple options for allocation, pick the best available option by reasoning to the best of your ability."},
+            {"role": "system", "content": "You are a Robot Task Allocation Expert"},
+            {"role": "user",   "content": curr_prompt}
+        ]
+        _, text = LM(client, messages, args.gpt_version, max_tokens=1000, frequency_penalty=0.69)
 
         # LLM이 생성한 추론 텍스트를 수집
         # 이 text는 3단계(Code Generation) 프롬프트에 그대로 이어붙여진다.
@@ -550,28 +530,21 @@ if __name__ == "__main__":
         # 2단계의 "# SOLUTION" 태그와 대응되는 3단계 전용 마커다.
         curr_prompt += f"\n# CODE Solution  \n"
 
-        # ── [3-D] 모델별 LLM 호출 ──
-        if "gpt" not in args.gpt_version:
-            # ── 구버전 GPT: frequency_penalty=0.30
-            # 1단계(0.15), 2단계(0.65) 사이의 중간값.
-            # 코드에는 어느 정도 반복이 허용되지만(robot_list 반복 참조),
-            # 너무 낮으면 같은 액션 패턴이 반복될 위험이 있다.
-            _, text = LM(client, curr_prompt, args.gpt_version, max_tokens=1000, stop=["def"], frequency_penalty=0.30)
-        else:
-            # ── GPT-4/3.5: system message 1개 (2단계의 2개보다 단순)
-            # system message가 1개인 이유:
-            #   - "왜 이 로봇을 선택했는가"의 추론은 이미 allocated_plan에 담겨 있다.
-            #   - 3단계는 추론이 아닌 코드 번역만 하면 되므로 역할 선언 1개로 충분하다.
-            # max_tokens=1400: 3단계가 전 단계 중 가장 큼.
-            #   - 함수 정의 + 내부 액션 × n개 + threading 배선 코드까지 포함해야 하기 때문
-            # frequency_penalty=0.4:
-            #   - 2단계(0.69)보다 낮음 — robot_list[0]이 여러 번 등장하는 것이 올바른 코드이므로
-            #     과도한 반복 억제는 오히려 코드를 망친다.
-            messages = [
-                {"role": "system", "content": "You are a Robot Task Allocation Expert"},
-                {"role": "user",   "content": curr_prompt}
-            ]
-            _, text = LM(client, messages, args.gpt_version, max_tokens=1400, frequency_penalty=0.4)
+        # ── [3-D] LLM 호출 ──
+        # ── GPT-4/3.5: system message 1개 (2단계의 2개보다 단순)
+        # system message가 1개인 이유:
+        #   - "왜 이 로봇을 선택했는가"의 추론은 이미 allocated_plan에 담겨 있다.
+        #   - 3단계는 추론이 아닌 코드 번역만 하면 되므로 역할 선언 1개로 충분하다.
+        # max_tokens=1400: 3단계가 전 단계 중 가장 큼.
+        #   - 함수 정의 + 내부 액션 × n개 + threading 배선 코드까지 포함해야 하기 때문
+        # frequency_penalty=0.4:
+        #   - 2단계(0.69)보다 낮음 — robot_list[0]이 여러 번 등장하는 것이 올바른 코드이므로
+        #     과도한 반복 억제는 오히려 코드를 망친다.
+        messages = [
+            {"role": "system", "content": "You are a Robot Task Allocation Expert"},
+            {"role": "user",   "content": curr_prompt}
+        ]
+        _, text = LM(client, messages, args.gpt_version, max_tokens=1400, frequency_penalty=0.4)
 
         # 생성된 코드를 수집.
         # 이 text가 execute_plan.py에서 aithor_connect.py와 합쳐져 최종 executable_plan.py가 된다.
