@@ -227,3 +227,5 @@ data/final_test/FloorPlan99.json
 logs/**/agent_*/
 logs/**/top_view/
 logs/**/executable_plan.pylogs/
+logs/
+.claude/
