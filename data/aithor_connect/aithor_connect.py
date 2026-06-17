@@ -234,7 +234,17 @@ def GoToObject(robots, dest_obj):
     goal_thresh = 0.25
     # at least one robot is far away from the goal
     
+    # 경로 타임아웃: 로봇들이 좁은 공간에서 서로 막아 목표에 영영 도달 못 할 때
+    #    무한 재시도(while)에 빠지는 것을 방지. 정상 도달 시엔 while 조건이 먼저
+    #    False가 되어 자연 종료되므로, 이 카운터는 "끼었을 때만" 발동한다.
+    nav_attempts = 0
+    MAX_NAV_ATTEMPTS = 60   # 0.5s sleep 기준 ~30초(단일 로봇). 정상 내비는 보통 수십 회 이내라 여유.
+
     while all(d > goal_thresh for d in dist_goals):
+        nav_attempts += 1
+        if nav_attempts > MAX_NAV_ATTEMPTS:
+            print("[경로 타임아웃] 로봇이 목표에 도달하지 못해 건너뜀:", dest_obj_id)
+            break
         for ia, robot in enumerate(robots):
             robot_name = robot['name']
             agent_id = int(robot_name[-1]) - 1
