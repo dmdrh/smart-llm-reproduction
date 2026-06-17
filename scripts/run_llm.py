@@ -219,6 +219,94 @@ def strip_hallucinated_imports(code_text):
 
 
 # ============================================================
+# [병렬 유휴 로봇 분배] distribute_idle_robots (⑱)
+# 배경: 병렬(threading) 서브태스크 함수가 모두 robots[0]만 써서, 한 로봇이
+#       동시에 여러 곳으로 가려다 동선이 꼬여 경로 타임아웃 발생(멀티로봇 1대화).
+# 교정: 같은 parallel group에서 동시에 시작되는 서로 다른 target 함수에
+#       robots[0], robots[1], ... 를 순서대로 배정한다.
+# 안전 게이트:
+#   (G1) 로봇 2대 미만 → 분배 불가, 원문 유지
+#   (G2) 로봇 스킬이 동질(homogeneous)하지 않으면 → 원문 유지
+#        (위치 기반 재배정이 스킬 매칭을 깨뜨릴 수 있음)
+#   (G3) 한 함수가 이미 여러 로봇 인덱스를 쓰면(coalition 역할분리) → 그 그룹 보류
+# 멱등: 단일 인덱스 함수는 재배정해도 결과 동일 → 여러 번 돌려도 안전.
+# ============================================================
+_THREAD_TARGET_RE = re.compile(r'threading\.Thread\s*\(\s*target\s*=\s*(\w+)')
+_JOIN_RE          = re.compile(r'\.join\s*\(\s*\)')
+_DEF_RE           = re.compile(r'^(\s*)def\s+(\w+)\s*\(')
+_ROBOT_IDX_RE     = re.compile(r'robots\s*\[\s*(\d+)\s*\]')
+
+
+def _function_line_ranges(lines):
+    """def + 들여쓰기로 각 함수의 [시작, 끝) 줄 범위를 구한다. {함수명: (s, e)} (e 미포함)."""
+    ranges, i, n = {}, 0, len(lines)
+    while i < n:
+        m = _DEF_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        base = len(m.group(1))                  # def의 들여쓰기 칸수
+        j = i + 1
+        while j < n:
+            if lines[j].strip() == '':           # 빈 줄은 본문 연속
+                j += 1
+                continue
+            indent = len(lines[j]) - len(lines[j].lstrip())
+            if indent <= base:                   # def보다 얕으면 본문 끝
+                break
+            j += 1
+        ranges[m.group(2)] = (i, j)
+        i = j
+    return ranges
+
+
+def _parallel_groups(lines):
+    """threading.Thread(target=FN)들을 join() 장벽 단위로 묶어 병렬 그룹을 순서대로 반환."""
+    groups, pending = [], []
+    for ln in lines:
+        for m in _THREAD_TARGET_RE.finditer(ln):
+            pending.append(m.group(1))
+        if _JOIN_RE.search(ln) and pending:      # join = 그룹 종료 장벽
+            groups.append(pending)
+            pending = []
+    if pending:                                  # join 없이 끝나는 경우 보호
+        groups.append(pending)
+    return groups
+
+
+def distribute_idle_robots(code_text, task_robots):
+    """병렬 그룹의 서로 다른 target 함수에 robots[0..]를 순서대로 배정한다.
+       동질 fleet에서만 동작하며, coalition/순차 함수는 건드리지 않는다."""
+    num_robots = len(task_robots)
+    if num_robots < 2:                                          # (G1)
+        return code_text
+    skill_sets = {frozenset(r.get('skills', [])) for r in task_robots}
+    if len(skill_sets) != 1:                                    # (G2) 이질 fleet → 보류
+        return code_text
+
+    lines  = code_text.splitlines()
+    ranges = _function_line_ranges(lines)
+    groups = _parallel_groups(lines)
+
+    def _indices(fn):
+        s, e = ranges[fn]
+        return {m.group(1) for ln in lines[s:e] for m in _ROBOT_IDX_RE.finditer(ln)}
+
+    for group in groups:
+        targets = [fn for fn in group if fn in ranges]          # 정의된 함수만
+        if len(targets) < 2:
+            continue
+        if any(len(_indices(fn)) > 1 for fn in targets):        # (G3) coalition 보호
+            continue
+        for pos, fn in enumerate(targets):
+            assigned = pos % num_robots                         # N>M이면 modulo
+            s, e = ranges[fn]
+            for li in range(s, e):
+                lines[li] = _ROBOT_IDX_RE.sub(f'robots[{assigned}]', lines[li])
+    return '\n'.join(lines)
+
+
+# ============================================================
 # [핵심 함수 1] LM - LLM(GPT) API 호출 래퍼  (openai>=1.0 신 SDK)
 # 역할: GPT 계열 모델에 프롬프트를 보내고 텍스트 응답을 반환한다.
 # 변경: openai.ChatCompletion.create → client.chat.completions.create
@@ -658,4 +746,6 @@ if __name__ == "__main__":
                 # 저장 직전 후처리: 1) 환각 import 제거 → 2) robot 인자 누락 교정
                 #   from skills import ... 줄 삭제, GoToObject('Knife') -> GoToObject(robots[0], 'Knife')
                 cleaned = strip_hallucinated_imports(code_plan[idx])
-                x.write(fix_robot_args(cleaned))
+                cleaned = fix_robot_args(cleaned)
+                cleaned = distribute_idle_robots(cleaned, available_robots[idx])  # ⑱ 병렬 유휴 로봇 분배
+                x.write(cleaned)
