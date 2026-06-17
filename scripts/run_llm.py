@@ -156,6 +156,69 @@ def validate_skills(decomposed_text, task_robots):
 
 
 # ============================================================
+# [함수 인자 자동 교정] fix_robot_args - code 생성 출력의 robot 인자 누락 교정
+# 배경: code 생성 단계에서 LLM이 스킬 함수 호출의 첫 인자(robot)를 자주 누락한다.
+#       예: GoToObject('Knife') → 실행 시 TypeError(missing positional 'dest_obj').
+#       올바른 형태: GoToObject(robots[0], 'Knife') 처럼 첫 인자가 robot이어야 한다.
+# 구분 기준: 'SkillName(' 직후 첫 인자가 문자열 리터럴(' 또는 ")이면 robot 누락으로 간주.
+#            첫 인자가 식별자(robot / robots[i] / robot_list[i])면 정상 → 건드리지 않는다.
+# ============================================================
+
+# 14개 스킬 호출 'SkillName(' 직후, 첫 인자가 따옴표(문자열)로 시작하는 경우만 매칭.
+# - \b: 단어 경계(MyGoToObject( 같은 접두 오매칭 방지)
+# - \s*\(\s*: 여는 괄호 + 공백 허용
+# - (?=['"]): 첫 인자가 따옴표로 시작하면 robot 누락. 따옴표는 소비하지 않는다.
+_MISSING_ROBOT_RE = re.compile(
+    r'\b(' + '|'.join(CANONICAL_SKILLS) + r')\s*\(\s*(?=[\'"])'
+)
+
+
+def fix_robot_args(code_text, robot_token="robots[0]"):
+    """code 생성 출력에서 robot 인자가 누락된 스킬 호출을 교정한다.
+       - 첫 인자가 문자열 리터럴인 14개 스킬 호출에 robot_token을 첫 인자로 삽입.
+         예: GoToObject('Knife') -> GoToObject(robots[0], 'Knife')
+       - 이미 robot 인자(robot / robots[i] / robot_list[i])가 있으면 매칭되지 않음.
+       - 주석(#)/함수정의(def) 라인은 건드리지 않음.
+       - 멱등: 교정 후 첫 인자가 식별자가 되어 재매칭되지 않음(두 번 돌려도 안전)."""
+    out = []
+    for line in code_text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith('#') or stripped.startswith('def '):
+            out.append(line)                       # 주석/정의는 원문 보존
+            continue
+        out.append(
+            _MISSING_ROBOT_RE.sub(lambda m: f"{m.group(1)}({robot_token}, ", line)
+        )
+    return '\n'.join(out)
+
+
+# ============================================================
+# [환각 import 제거] strip_hallucinated_imports - code 생성 출력의 가짜 import 제거
+# 배경: code 생성 단계에서 LLM이 'from skills import GoToObject, ...' 같은 import를
+#       환각한다(논문 프롬프트 예시의 'from skills import'를 따라함). 실제 'skills'
+#       모듈은 없어서 실행 시 ModuleNotFoundError로 죽는다.
+# 안전: 'skills' 모듈만 한정 + 단어 경계(\b)로 skillset/skills_helper 등 정상 모듈은
+#       건드리지 않는다. threading 등 다른 정상 import도 손대지 않는다.
+# ============================================================
+
+# 환각된 'skills' 모듈 import 줄 매칭:
+#   from skills import ...        / from skills.foo import ...
+#   import skills                 / import skills as s / import skills.foo
+_HALLUCINATED_IMPORT_RE = re.compile(
+    r'^\s*(from\s+skills(\.\w+)*\s+import\b|import\s+skills\b)'
+)
+
+
+def strip_hallucinated_imports(code_text):
+    """code 생성 출력에서 환각된 'skills' 모듈 import 줄을 제거한다.
+       - 'from skills import ...' / 'import skills' (및 변형) 줄을 삭제.
+       - threading 등 다른 정상 import는 절대 건드리지 않음."""
+    out = [line for line in code_text.splitlines()
+           if not _HALLUCINATED_IMPORT_RE.match(line)]
+    return '\n'.join(out)
+
+
+# ============================================================
 # [핵심 함수 1] LM - LLM(GPT) API 호출 래퍼  (openai>=1.0 신 SDK)
 # 역할: GPT 계열 모델에 프롬프트를 보내고 텍스트 응답을 반환한다.
 # 변경: openai.ChatCompletion.create → client.chat.completions.create
@@ -592,4 +655,7 @@ if __name__ == "__main__":
                 a.write(allocated_plan[idx])
 
             with open(f"./logs/{folder_name}/code_plan.py", 'w') as x:
-                x.write(code_plan[idx])
+                # 저장 직전 후처리: 1) 환각 import 제거 → 2) robot 인자 누락 교정
+                #   from skills import ... 줄 삭제, GoToObject('Knife') -> GoToObject(robots[0], 'Knife')
+                cleaned = strip_hallucinated_imports(code_plan[idx])
+                x.write(fix_robot_args(cleaned))

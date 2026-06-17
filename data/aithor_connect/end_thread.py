@@ -9,7 +9,7 @@ task_over = True
 time.sleep(5)
 
 
-exec = float(success_exec) / float(total_exec)
+exec = float(success_exec) / float(total_exec) if total_exec > 0 else 0.0
 
 print (ground_truth)
 objs = list([obj for obj in c.last_event.metadata["objects"]])
