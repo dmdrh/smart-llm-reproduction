@@ -226,4 +226,4 @@ api_key.txt
 data/final_test/FloorPlan99.json
 logs/**/agent_*/
 logs/**/top_view/
-logs/**/executable_plan.py
+logs/**/executable_plan.pylogs/
